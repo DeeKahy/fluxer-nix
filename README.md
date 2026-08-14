@@ -3,7 +3,9 @@
 Nix package for the [Fluxer](https://fluxer.app) canary desktop client, wrapping the
 upstream AppImage with `appimageTools.wrapType2`.
 
-Platforms: `x86_64-linux`, `aarch64-linux`.
+Platform: `x86_64-linux`. Upstream also ships an `arm64` AppImage, but it has not
+been tested here and a previous contributor reported it failing to run, so it is
+not claimed.
 
 ## Install
 
