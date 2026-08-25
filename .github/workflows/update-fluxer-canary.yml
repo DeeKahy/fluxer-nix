@@ -111,6 +111,23 @@ jobs:
           test -f result/share/applications/fluxer-canary.desktop
           test -d result/share/icons
 
+      - name: Collect the upstream changelog
+        if: steps.check.outputs.changed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          OLD_VERSION: ${{ steps.check.outputs.old_version }}
+          NEW_VERSION: ${{ steps.check.outputs.new_version }}
+        run: |
+          set -euo pipefail
+
+          # Best effort: the script prints an explanatory block rather than
+          # failing, but a crash here must not sink an otherwise good bump.
+          python3 .github/scripts/changelog.py "$OLD_VERSION" "$NEW_VERSION" \
+            > "$RUNNER_TEMP/changelog.md" \
+            || echo "<!-- changelog generation failed -->" > "$RUNNER_TEMP/changelog.md"
+
+          cat "$RUNNER_TEMP/changelog.md"
+
       - name: Push the branch
         if: steps.check.outputs.changed == 'true'
         env:
@@ -141,26 +158,32 @@ jobs:
 
           title="fluxer-canary: $OLD_VERSION -> $NEW_VERSION"
           workflow_url="https://github.com/$GITHUB_REPOSITORY/blob/main/.github/workflows/update-fluxer-canary.yml"
+          body_file="$RUNNER_TEMP/pr-body.md"
 
-          body=$(printf '%s\n' \
-            "Automated bump of the canary AppImage." \
-            "" \
-            "| | |" \
-            "| --- | --- |" \
-            "| From | \`$OLD_VERSION\` |" \
-            "| To | \`$NEW_VERSION\` |" \
-            "| Published upstream | $PUB_DATE |" \
-            "" \
-            "The hash comes from [upstream's release metadata]($METADATA_URL)." \
-            "\`nix build .#fluxer-canary\` succeeded on this branch, and the wrapper, desktop" \
-            "entry and icons are all present in the result. Nobody has launched it, though." \
-            "That part is on you, @$REVIEWER." \
-            "" \
-            "<sub>Opened by [\`update-fluxer-canary.yml\`]($workflow_url). Re-run with \`gh workflow run update-fluxer-canary.yml\`.</sub>")
+          {
+            printf '%s\n' \
+              "Automated bump of the canary AppImage." \
+              "" \
+              "| | |" \
+              "| --- | --- |" \
+              "| From | \`$OLD_VERSION\` |" \
+              "| To | \`$NEW_VERSION\` |" \
+              "| Published upstream | $PUB_DATE |" \
+              "" \
+              "The hash comes from [upstream's release metadata]($METADATA_URL)." \
+              "\`nix build .#fluxer-canary\` succeeded on this branch, and the wrapper, desktop" \
+              "entry and icons are all present in the result. Nobody has launched it, though." \
+              "That part is on you, @$REVIEWER." \
+              ""
+            cat "$RUNNER_TEMP/changelog.md"
+            printf '%s\n' \
+              "" \
+              "<sub>Opened by [\`update-fluxer-canary.yml\`]($workflow_url). Re-run with \`gh workflow run update-fluxer-canary.yml\`.</sub>"
+          } > "$body_file"
 
           if url=$(gh pr view "$BRANCH" --json url --jq .url 2>/dev/null); then
             echo "Refreshing existing PR: $url"
-            gh pr edit "$BRANCH" --title "$title" --body "$body"
+            gh pr edit "$BRANCH" --title "$title" --body-file "$body_file"
 
             # Only re-request a review once the previous request has been
             # cleared, so a PR left open for a week does not ping every morning.
@@ -174,7 +197,7 @@ jobs:
               --base main \
               --head "$BRANCH" \
               --title "$title" \
-              --body "$body" \
+              --body-file "$body_file" \
               --assignee "$REVIEWER"
             gh pr edit "$BRANCH" --add-reviewer "$REVIEWER" \
               || echo "::warning::Could not request a review from $REVIEWER"
