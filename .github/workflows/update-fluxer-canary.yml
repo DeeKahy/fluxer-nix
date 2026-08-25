@@ -181,15 +181,20 @@ jobs:
               "<sub>Opened by [\`update-fluxer-canary.yml\`]($workflow_url). Re-run with \`gh workflow run update-fluxer-canary.yml\`.</sub>"
           } > "$body_file"
 
-          if url=$(gh pr view "$BRANCH" --json url --jq .url 2>/dev/null); then
-            echo "Refreshing existing PR: $url"
-            gh pr edit "$BRANCH" --title "$title" --body-file "$body_file"
+          # Deliberately --state open: a closed PR must not be resurrected by
+          # editing it, or a bump you rejected would keep getting new content
+          # pushed into it and you would never see a fresh one.
+          existing=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
+
+          if [ -n "$existing" ]; then
+            echo "Refreshing open PR #$existing"
+            gh pr edit "$existing" --title "$title" --body-file "$body_file"
 
             # Only re-request a review once the previous request has been
             # cleared, so a PR left open for a week does not ping every morning.
-            pending=$(gh pr view "$BRANCH" --json reviewRequests --jq "[.reviewRequests[].login] | index(\"$REVIEWER\")")
+            pending=$(gh pr view "$existing" --json reviewRequests --jq "[.reviewRequests[].login] | index(\"$REVIEWER\")")
             if [ "$pending" = "null" ]; then
-              gh pr edit "$BRANCH" --add-reviewer "$REVIEWER" \
+              gh pr edit "$existing" --add-reviewer "$REVIEWER" \
                 || echo "::warning::Could not request a review from $REVIEWER"
             fi
           else
@@ -203,4 +208,5 @@ jobs:
               || echo "::warning::Could not request a review from $REVIEWER"
           fi
 
-          gh pr view "$BRANCH" --json url --jq '"PR: " + .url' | tee -a "$GITHUB_STEP_SUMMARY"
+          gh pr list --head "$BRANCH" --state open --json url --jq '"PR: " + .[0].url' \
+            | tee -a "$GITHUB_STEP_SUMMARY"
