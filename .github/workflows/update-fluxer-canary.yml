@@ -1,0 +1,183 @@
+name: Update fluxer-canary
+
+# Checks upstream's canary release metadata once a day. If a newer build is out,
+# bumps package.nix, verifies the result actually builds, and opens a PR (or
+# refreshes the one it opened earlier) with DeeKahy as reviewer.
+#
+# This only ever touches this repository.
+
+on:
+  schedule:
+    - cron: '0 5 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: update-fluxer-canary
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  METADATA_URL: https://api.canary.fluxer.app/dl/desktop/canary/linux/x64/latest
+  PACKAGE: pkgs/by-name/fl/fluxer-canary/package.nix
+  BRANCH: auto/fluxer-canary-update
+  REVIEWER: DeeKahy
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Check upstream for a newer canary build
+        id: check
+        run: |
+          set -euo pipefail
+
+          latest=$(curl -sSf --retry 3 --retry-delay 5 "$METADATA_URL")
+          new_version=$(jq -er '.version' <<<"$latest")
+          new_sha256=$(jq -er '.files.appimage.sha256' <<<"$latest")
+          pub_date=$(jq -r '.pub_date // "unknown"' <<<"$latest")
+
+          old_version=$(sed -n 's/^  version = "\(.*\)";$/\1/p' "$PACKAGE")
+          if [ -z "$old_version" ]; then
+            echo "::error::Could not read the current version out of $PACKAGE"
+            exit 1
+          fi
+
+          echo "current: $old_version"
+          echo "upstream: $new_version (published $pub_date)"
+
+          if [ "$new_version" = "$old_version" ]; then
+            echo "Already up to date."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Date-based versions (YYYY.MDD.HHMMSS) do not compare correctly as
+          # plain strings once the month rolls over to two digits, so use -V.
+          if [ "$(printf '%s\n%s\n' "$old_version" "$new_version" | sort -V | tail -1)" != "$new_version" ]; then
+            echo "::warning::Upstream is serving $new_version, older than the pinned $old_version. Skipping."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          new_hash=$(nix hash convert --hash-algo sha256 --to sri "$new_sha256")
+
+          {
+            echo "changed=true"
+            echo "old_version=$old_version"
+            echo "new_version=$new_version"
+            echo "new_hash=$new_hash"
+            echo "pub_date=$pub_date"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Bump package.nix
+        if: steps.check.outputs.changed == 'true'
+        env:
+          NEW_VERSION: ${{ steps.check.outputs.new_version }}
+          NEW_HASH: ${{ steps.check.outputs.new_hash }}
+        run: |
+          set -euo pipefail
+
+          sed -i "s|^  version = \".*\";$|  version = \"$NEW_VERSION\";|" "$PACKAGE"
+          sed -i "s|^    hash = \"sha256-.*\";$|    hash = \"$NEW_HASH\";|" "$PACKAGE"
+
+          grep -qF "version = \"$NEW_VERSION\";" "$PACKAGE"
+          grep -qF "hash = \"$NEW_HASH\";" "$PACKAGE"
+
+          git --no-pager diff -- "$PACKAGE"
+
+      - name: Build it
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+
+          nix build .#fluxer-canary --print-build-logs
+
+          # The build fetches the AppImage against the new hash and runs
+          # extraInstallCommands, so a layout change upstream fails here rather
+          # than landing in a PR.
+          test -x result/bin/fluxer-canary
+          test -f result/share/applications/fluxer-canary.desktop
+          test -d result/share/icons
+
+      - name: Push the branch
+        if: steps.check.outputs.changed == 'true'
+        env:
+          OLD_VERSION: ${{ steps.check.outputs.old_version }}
+          NEW_VERSION: ${{ steps.check.outputs.new_version }}
+        run: |
+          set -euo pipefail
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Always rebuild the branch on top of the default branch so repeated
+          # runs replace the bump instead of stacking commits on top of it.
+          git checkout -B "$BRANCH"
+          git add -- "$PACKAGE"
+          git commit -m "fluxer-canary: $OLD_VERSION -> $NEW_VERSION"
+          git push --force origin "$BRANCH"
+
+      - name: Open or refresh the PR
+        if: steps.check.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OLD_VERSION: ${{ steps.check.outputs.old_version }}
+          NEW_VERSION: ${{ steps.check.outputs.new_version }}
+          PUB_DATE: ${{ steps.check.outputs.pub_date }}
+        run: |
+          set -euo pipefail
+
+          title="fluxer-canary: $OLD_VERSION -> $NEW_VERSION"
+          workflow_url="https://github.com/$GITHUB_REPOSITORY/blob/main/.github/workflows/update-fluxer-canary.yml"
+
+          body=$(printf '%s\n' \
+            "Automated bump of the canary AppImage." \
+            "" \
+            "| | |" \
+            "| --- | --- |" \
+            "| From | \`$OLD_VERSION\` |" \
+            "| To | \`$NEW_VERSION\` |" \
+            "| Published upstream | $PUB_DATE |" \
+            "" \
+            "The hash comes from [upstream's release metadata]($METADATA_URL)." \
+            "\`nix build .#fluxer-canary\` succeeded on this branch, and the wrapper, desktop" \
+            "entry and icons are all present in the result. Nobody has launched it, though." \
+            "That part is on you, @$REVIEWER." \
+            "" \
+            "<sub>Opened by [\`update-fluxer-canary.yml\`]($workflow_url). Re-run with \`gh workflow run update-fluxer-canary.yml\`.</sub>")
+
+          if url=$(gh pr view "$BRANCH" --json url --jq .url 2>/dev/null); then
+            echo "Refreshing existing PR: $url"
+            gh pr edit "$BRANCH" --title "$title" --body "$body"
+
+            # Only re-request a review once the previous request has been
+            # cleared, so a PR left open for a week does not ping every morning.
+            pending=$(gh pr view "$BRANCH" --json reviewRequests --jq "[.reviewRequests[].login] | index(\"$REVIEWER\")")
+            if [ "$pending" = "null" ]; then
+              gh pr edit "$BRANCH" --add-reviewer "$REVIEWER" \
+                || echo "::warning::Could not request a review from $REVIEWER"
+            fi
+          else
+            gh pr create \
+              --base main \
+              --head "$BRANCH" \
+              --title "$title" \
+              --body "$body" \
+              --assignee "$REVIEWER"
+            gh pr edit "$BRANCH" --add-reviewer "$REVIEWER" \
+              || echo "::warning::Could not request a review from $REVIEWER"
+          fi
+
+          gh pr view "$BRANCH" --json url --jq '"PR: " + .url' | tee -a "$GITHUB_STEP_SUMMARY"
