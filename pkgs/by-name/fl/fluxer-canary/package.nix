@@ -9,7 +9,7 @@
 
 let
   pname = "fluxer-canary";
-  version = "2026.831.195359";
+  version = "2026.901.185447";
 
   # The version and matching sha256 are served as JSON from
   #   https://api.canary.fluxer.app/dl/desktop/canary/linux/x64/latest
@@ -17,7 +17,7 @@ let
   src = fetchurl {
     name = "${pname}-${version}.AppImage";
     url = "https://api.canary.fluxer.app/dl/desktop/canary/linux/x64/${version}/appimage";
-    hash = "sha256-71id5AihorGnbq8Hp1MxyHOFKZeY2541cKt/WQiTN7g=";
+    hash = "sha256-/f8Ya0jqqpt44h2BBtHHmwOe6FxG/nQ4xcLjQ3cUREc=";
   };
 
   appimageContents = appimageTools.extract { inherit pname version src; };
