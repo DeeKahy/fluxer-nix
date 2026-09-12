@@ -1,5 +1,5 @@
 {
-  description = "Fluxer Canary desktop client, packaged for Nix (nixpkgs-ready)";
+  description = "Fluxer desktop client, packaged for Nix (nixpkgs-ready)";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 
@@ -14,18 +14,18 @@
     in
     {
       overlays.default = final: _prev: {
-        fluxer-canary = final.callPackage ./pkgs/by-name/fl/fluxer-canary/package.nix { };
+        fluxer-bin = final.callPackage ./pkgs/by-name/fl/fluxer-bin/package.nix { };
       };
 
       packages = forAllSystems (
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
-          fluxer-canary = pkgs.callPackage ./pkgs/by-name/fl/fluxer-canary/package.nix { };
+          fluxer-bin = pkgs.callPackage ./pkgs/by-name/fl/fluxer-bin/package.nix { };
         in
         {
-          inherit fluxer-canary;
-          default = fluxer-canary;
+          inherit fluxer-bin;
+          default = fluxer-bin;
         }
       );
     };

@@ -1,4 +1,4 @@
-name: Update fluxer-canary
+name: Update fluxer-bin
 
 # Checks upstream's canary release metadata once a day. If a newer build is out,
 # bumps package.nix, verifies the result actually builds, and opens a PR (or
@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: update-fluxer-canary
+  group: update-fluxer-bin
   cancel-in-progress: false
 
 permissions:
@@ -20,9 +20,9 @@ permissions:
   pull-requests: write
 
 env:
-  METADATA_URL: https://api.canary.fluxer.app/dl/desktop/canary/linux/x64/latest
-  PACKAGE: pkgs/by-name/fl/fluxer-canary/package.nix
-  BRANCH: auto/fluxer-canary-update
+  METADATA_URL: https://api.fluxer.app/dl/desktop/canary/linux/x64/latest
+  PACKAGE: pkgs/by-name/fl/fluxer-bin/package.nix
+  BRANCH: auto/fluxer-bin-update
   REVIEWER: DeeKahy
 
 jobs:
@@ -102,13 +102,13 @@ jobs:
         run: |
           set -euo pipefail
 
-          nix build .#fluxer-canary --print-build-logs
+          nix build .#fluxer-bin --print-build-logs
 
           # The build fetches the AppImage against the new hash and runs
           # extraInstallCommands, so a layout change upstream fails here rather
           # than landing in a PR.
-          test -x result/bin/fluxer-canary
-          test -f result/share/applications/fluxer-canary.desktop
+          test -x result/bin/fluxer-bin
+          test -f result/share/applications/fluxer-bin.desktop
           test -d result/share/icons
 
       - name: Collect the upstream changelog
@@ -143,7 +143,7 @@ jobs:
           # runs replace the bump instead of stacking commits on top of it.
           git checkout -B "$BRANCH"
           git add -- "$PACKAGE"
-          git commit -m "fluxer-canary: $OLD_VERSION -> $NEW_VERSION"
+          git commit -m "fluxer-bin: $OLD_VERSION -> $NEW_VERSION"
           git push --force origin "$BRANCH"
 
       - name: Open or refresh the PR
@@ -156,8 +156,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          title="fluxer-canary: $OLD_VERSION -> $NEW_VERSION"
-          workflow_url="https://github.com/$GITHUB_REPOSITORY/blob/main/.github/workflows/update-fluxer-canary.yml"
+          title="fluxer-bin: $OLD_VERSION -> $NEW_VERSION"
+          workflow_url="https://github.com/$GITHUB_REPOSITORY/blob/main/.github/workflows/update-fluxer-bin.yml"
           body_file="$RUNNER_TEMP/pr-body.md"
 
           {
@@ -171,14 +171,14 @@ jobs:
               "| Published upstream | $PUB_DATE |" \
               "" \
               "The hash comes from [upstream's release metadata]($METADATA_URL)." \
-              "\`nix build .#fluxer-canary\` succeeded on this branch, and the wrapper, desktop" \
+              "\`nix build .#fluxer-bin\` succeeded on this branch, and the wrapper, desktop" \
               "entry and icons are all present in the result. Nobody has launched it, though." \
               "That part is on you, @$REVIEWER." \
               ""
             cat "$RUNNER_TEMP/changelog.md"
             printf '%s\n' \
               "" \
-              "<sub>Opened by [\`update-fluxer-canary.yml\`]($workflow_url). Re-run with \`gh workflow run update-fluxer-canary.yml\`.</sub>"
+              "<sub>Opened by [\`update-fluxer-bin.yml\`]($workflow_url). Re-run with \`gh workflow run update-fluxer-bin.yml\`.</sub>"
           } > "$body_file"
 
           # Deliberately --state open: a closed PR must not be resurrected by
