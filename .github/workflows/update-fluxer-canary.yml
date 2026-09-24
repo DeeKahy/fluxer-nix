@@ -43,7 +43,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          latest=$(curl -sSf --retry 3 --retry-delay 5 "$METADATA_URL")
+          latest=$(curl -sSfL --retry 3 --retry-delay 5 "$METADATA_URL")
           new_version=$(jq -er '.version' <<<"$latest")
           new_sha256=$(jq -er '.files.appimage.sha256' <<<"$latest")
           pub_date=$(jq -r '.pub_date // "unknown"' <<<"$latest")
