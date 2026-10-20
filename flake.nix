@@ -14,18 +14,18 @@
     in
     {
       overlays.default = final: _prev: {
-        fluxer-bin = final.callPackage ./pkgs/by-name/fl/fluxer-bin/package.nix { };
+        fluxer-canary-bin = final.callPackage ./pkgs/by-name/fl/fluxer-canary-bin/package.nix { };
       };
 
       packages = forAllSystems (
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
-          fluxer-bin = pkgs.callPackage ./pkgs/by-name/fl/fluxer-bin/package.nix { };
+          fluxer-canary-bin = pkgs.callPackage ./pkgs/by-name/fl/fluxer-canary-bin/package.nix { };
         in
         {
-          inherit fluxer-bin;
-          default = fluxer-bin;
+          inherit fluxer-canary-bin;
+          default = fluxer-canary-bin;
         }
       );
     };

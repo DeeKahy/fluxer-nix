@@ -1,8 +1,12 @@
-name: Update fluxer-bin
+name: Update fluxer-canary-bin
 
 # Checks upstream's canary release metadata once a day. If a newer build is out,
 # bumps package.nix, verifies the result actually builds, and opens a PR (or
 # refreshes the one it opened earlier) with DeeKahy as reviewer.
+#
+# The bump itself is delegated to the package's own update.sh, so this workflow
+# and `passthru.updateScript` cannot drift apart. In particular update.sh is
+# what knows that there are two architectures to rehash.
 #
 # This only ever touches this repository.
 
@@ -12,7 +16,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: update-fluxer-bin
+  group: update-fluxer-canary-bin
   cancel-in-progress: false
 
 permissions:
@@ -20,9 +24,11 @@ permissions:
   pull-requests: write
 
 env:
-  METADATA_URL: https://api.fluxer.app/dl/desktop/canary/linux/x64/latest
-  PACKAGE: pkgs/by-name/fl/fluxer-bin/package.nix
-  BRANCH: auto/fluxer-bin-update
+  # api.fluxer.app/dl/... 302s to this; see the comment in package.nix.
+  METADATA_URL: https://pkgs.fluxer.com/desktop/canary/linux/x64/latest.json
+  PACKAGE: pkgs/by-name/fl/fluxer-canary-bin/package.nix
+  UPDATE_SCRIPT: pkgs/by-name/fl/fluxer-canary-bin/update.sh
+  BRANCH: auto/fluxer-canary-bin-update
   REVIEWER: DeeKahy
 
 jobs:
@@ -43,9 +49,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          latest=$(curl -sSf --retry 3 --retry-delay 5 "$METADATA_URL")
+          latest=$(curl -sSfL --retry 3 --retry-delay 5 "$METADATA_URL")
           new_version=$(jq -er '.version' <<<"$latest")
-          new_sha256=$(jq -er '.files.appimage.sha256' <<<"$latest")
           pub_date=$(jq -r '.pub_date // "unknown"' <<<"$latest")
 
           old_version=$(sed -n 's/^  version = "\(.*\)";$/\1/p' "$PACKAGE")
@@ -71,13 +76,10 @@ jobs:
             exit 0
           fi
 
-          new_hash=$(nix hash convert --hash-algo sha256 --to sri "$new_sha256")
-
           {
             echo "changed=true"
             echo "old_version=$old_version"
             echo "new_version=$new_version"
-            echo "new_hash=$new_hash"
             echo "pub_date=$pub_date"
           } >> "$GITHUB_OUTPUT"
 
@@ -85,15 +87,22 @@ jobs:
         if: steps.check.outputs.changed == 'true'
         env:
           NEW_VERSION: ${{ steps.check.outputs.new_version }}
-          NEW_HASH: ${{ steps.check.outputs.new_hash }}
         run: |
           set -euo pipefail
 
-          sed -i "s|^  version = \".*\";$|  version = \"$NEW_VERSION\";|" "$PACKAGE"
-          sed -i "s|^    hash = \"sha256-.*\";$|    hash = \"$NEW_HASH\";|" "$PACKAGE"
+          # update.sh rehashes every architecture and refuses to write a
+          # half-updated file if upstream ever stops publishing them together.
+          ./"$UPDATE_SCRIPT"
 
           grep -qF "version = \"$NEW_VERSION\";" "$PACKAGE"
-          grep -qF "hash = \"$NEW_HASH\";" "$PACKAGE"
+
+          # Guard against the two architectures ending up with the same hash,
+          # which is what a careless single-line sed here used to produce.
+          hashes=$(sed -n 's/^      hash = "\(.*\)";$/\1/p' "$PACKAGE")
+          if [ "$(printf '%s\n' "$hashes" | wc -l)" -ne "$(printf '%s\n' "$hashes" | sort -u | wc -l)" ]; then
+            echo "::error::The per-architecture hashes in $PACKAGE are not distinct"
+            exit 1
+          fi
 
           git --no-pager diff -- "$PACKAGE"
 
@@ -102,14 +111,15 @@ jobs:
         run: |
           set -euo pipefail
 
-          nix build .#fluxer-bin --print-build-logs
+          nix build .#fluxer-canary-bin --print-build-logs
 
           # The build fetches the AppImage against the new hash and runs
           # extraInstallCommands, so a layout change upstream fails here rather
-          # than landing in a PR.
-          test -x result/bin/fluxer-bin
-          test -f result/share/applications/fluxer-bin.desktop
-          test -d result/share/icons
+          # than landing in a PR. The desktop entry's basename and the icon name
+          # both come from inside the AppImage, so check them by name.
+          test -x result/bin/fluxer-canary-bin
+          test -f result/share/applications/app.fluxer.FluxerDesktopCanary.desktop
+          test -f result/share/icons/hicolor/48x48/apps/fluxer-canary.png
 
       - name: Collect the upstream changelog
         if: steps.check.outputs.changed == 'true'
@@ -143,7 +153,7 @@ jobs:
           # runs replace the bump instead of stacking commits on top of it.
           git checkout -B "$BRANCH"
           git add -- "$PACKAGE"
-          git commit -m "fluxer-bin: $OLD_VERSION -> $NEW_VERSION"
+          git commit -m "fluxer-canary-bin: $OLD_VERSION -> $NEW_VERSION"
           git push --force origin "$BRANCH"
 
       - name: Open or refresh the PR
@@ -156,8 +166,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          title="fluxer-bin: $OLD_VERSION -> $NEW_VERSION"
-          workflow_url="https://github.com/$GITHUB_REPOSITORY/blob/main/.github/workflows/update-fluxer-bin.yml"
+          title="fluxer-canary-bin: $OLD_VERSION -> $NEW_VERSION"
+          workflow_url="https://github.com/$GITHUB_REPOSITORY/blob/main/.github/workflows/update-fluxer-canary-bin.yml"
           body_file="$RUNNER_TEMP/pr-body.md"
 
           {
@@ -170,15 +180,16 @@ jobs:
               "| To | \`$NEW_VERSION\` |" \
               "| Published upstream | $PUB_DATE |" \
               "" \
-              "The hash comes from [upstream's release metadata]($METADATA_URL)." \
-              "\`nix build .#fluxer-bin\` succeeded on this branch, and the wrapper, desktop" \
-              "entry and icons are all present in the result. Nobody has launched it, though." \
-              "That part is on you, @$REVIEWER." \
+              "The hashes come from [upstream's release metadata]($METADATA_URL), via the" \
+              "package's own \`update.sh\`, for both x86_64 and aarch64." \
+              "\`nix build .#fluxer-canary-bin\` succeeded on this branch, and the wrapper," \
+              "desktop entry and icons are all present in the result. Nobody has launched it," \
+              "though. That part is on you, @$REVIEWER." \
               ""
             cat "$RUNNER_TEMP/changelog.md"
             printf '%s\n' \
               "" \
-              "<sub>Opened by [\`update-fluxer-bin.yml\`]($workflow_url). Re-run with \`gh workflow run update-fluxer-bin.yml\`.</sub>"
+              "<sub>Opened by [\`update-fluxer-canary-bin.yml\`]($workflow_url). Re-run with \`gh workflow run update-fluxer-canary-bin.yml\`.</sub>"
           } > "$body_file"
 
           # Deliberately --state open: a closed PR must not be resurrected by
