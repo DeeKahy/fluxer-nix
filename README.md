@@ -39,25 +39,20 @@ Or through the overlay:
 
 `pkgs/by-name/fl/fluxer-canary-bin/update.sh` is wired up as
 `passthru.updateScript`. It reads the version and each architecture's sha256
-from upstream's release metadata and rewrites `package.nix` in place, refusing
-to write a half-updated file if upstream ever stops publishing the two
-architectures together.
+from upstream's release metadata and hands them to `update-source-version`,
+once per system.
 
-Run it from the root of either this repository or a nixpkgs checkout:
-
-```console
-$ ./pkgs/by-name/fl/fluxer-canary-bin/update.sh
-```
-
-In nixpkgs it is also reachable the usual way:
+It drives nixpkgs' own updater, so it only runs inside a nixpkgs checkout:
 
 ```console
 $ nix-shell maintainers/scripts/update.nix --argstr package fluxer-canary-bin
 ```
 
-`.github/workflows/update-fluxer-canary-bin.yml` runs that same script daily,
-builds the result and opens a PR. Upstream cuts builds several times a day, so
-the pinned version goes stale fast.
+`.github/workflows/update-fluxer-canary-bin.yml` covers this repository
+instead, where that updater is unavailable. It carries its own equivalent
+bump, rehashing each architecture separately, then builds the result and opens
+a PR. Upstream cuts builds several times a day, so the pinned version goes
+stale fast.
 
 ## Layout
 

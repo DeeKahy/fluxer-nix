@@ -4,9 +4,10 @@ name: Update fluxer-canary-bin
 # bumps package.nix, verifies the result actually builds, and opens a PR (or
 # refreshes the one it opened earlier) with DeeKahy as reviewer.
 #
-# The bump itself is delegated to the package's own update.sh, so this workflow
-# and `passthru.updateScript` cannot drift apart. In particular update.sh is
-# what knows that there are two architectures to rehash.
+# The package's own update.sh drives nixpkgs' update-source-version, which only
+# works inside a nixpkgs checkout, so this workflow carries its own bump. It
+# rehashes each architecture separately -- a single sed over `hash = "sha256-`
+# would stamp the x86_64 hash onto both.
 #
 # This only ever touches this repository.
 
@@ -27,7 +28,6 @@ env:
   # api.fluxer.app/dl/... 302s to this; see the comment in package.nix.
   METADATA_URL: https://pkgs.fluxer.com/desktop/canary/linux/x64/latest.json
   PACKAGE: pkgs/by-name/fl/fluxer-canary-bin/package.nix
-  UPDATE_SCRIPT: pkgs/by-name/fl/fluxer-canary-bin/update.sh
   BRANCH: auto/fluxer-canary-bin-update
   REVIEWER: DeeKahy
 
@@ -90,14 +90,32 @@ jobs:
         run: |
           set -euo pipefail
 
-          # update.sh rehashes every architecture and refuses to write a
-          # half-updated file if upstream ever stops publishing them together.
-          ./"$UPDATE_SCRIPT"
+          sed -i "s|^  version = \".*\";$|  version = \"$NEW_VERSION\";|" "$PACKAGE"
+
+          # One architecture at a time, scoped to that system's block, so the
+          # two can never be transposed or collapsed onto one hash.
+          while read -r system arch; do
+            latest=$(curl -sSfL --retry 3 --retry-delay 5 \
+              "https://pkgs.fluxer.com/desktop/canary/linux/$arch/latest.json")
+
+            arch_version=$(jq -er '.version' <<<"$latest")
+            if [ "$arch_version" != "$NEW_VERSION" ]; then
+              echo "::error::$arch is at $arch_version, expected $NEW_VERSION"
+              exit 1
+            fi
+
+            hash=$(nix hash convert --hash-algo sha256 --to sri \
+              "$(jq -er '.files.appimage.sha256' <<<"$latest")")
+
+            sed -i "/^    $system = {$/,/^    };$/ s|hash = \".*\";|hash = \"$hash\";|" \
+              "$PACKAGE"
+          done <<'SYSTEMS'
+          x86_64-linux x64
+          aarch64-linux arm64
+          SYSTEMS
 
           grep -qF "version = \"$NEW_VERSION\";" "$PACKAGE"
 
-          # Guard against the two architectures ending up with the same hash,
-          # which is what a careless single-line sed here used to produce.
           hashes=$(sed -n 's/^      hash = "\(.*\)";$/\1/p' "$PACKAGE")
           if [ "$(printf '%s\n' "$hashes" | wc -l)" -ne "$(printf '%s\n' "$hashes" | sort -u | wc -l)" ]; then
             echo "::error::The per-architecture hashes in $PACKAGE are not distinct"
